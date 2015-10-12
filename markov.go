@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -24,17 +25,51 @@ func buildKey(prefix1 string, prefix2 string) string {
 	return fmt.Sprintf("%s %s", prefix1, prefix2)
 }
 
-func BuildIndice(text string) map[string][]string {
-	t := time.Now().UTC().UnixNano()
-	arr := strings.Fields(text)
-	t = report_elapse(t, "split words")
+type Item struct {
+	key   string
+	value string
+}
+
+func iterSlice(arr []string, c chan Item) {
 	prefix1, prefix2, suffix := NOWORD, NOWORD, NOWORD
-	tab := make(map[string][]string, 10240)
 	for i := range arr {
 		prefix1 = prefix2
 		prefix2 = suffix
 		suffix = arr[i]
-		insertSuffix(tab, buildKey(prefix1, prefix2), suffix)
+		c <- Item{buildKey(prefix1, prefix2), suffix}
+	}
+}
+
+func BuildIndice(text string) map[string][]string {
+	t := time.Now().UTC().UnixNano()
+	arr := strings.Fields(text)
+	t = report_elapse(t, "split words")
+	tab := make(map[string][]string, 10240)
+	cores := runtime.NumCPU()
+	if cores < 2 || len(arr) < 100 {
+		prefix1, prefix2, suffix := NOWORD, NOWORD, NOWORD
+		for i := range arr {
+			prefix1 = prefix2
+			prefix2 = suffix
+			suffix = arr[i]
+			insertSuffix(tab, buildKey(prefix1, prefix2), suffix)
+		}
+	} else {
+		c := make(chan Item)
+		start := 0
+		step := len(arr) / cores
+		for i := 0; i < cores; i++ {
+			end := start + step
+			if i == cores-1 {
+				end = len(arr)
+			}
+			go iterSlice(arr[start:end], c)
+			start = end
+		}
+		for i := 0; i < len(arr); i++ {
+			item := <-c
+			insertSuffix(tab, item.key, item.value)
+		}
 	}
 	report_elapse(t, "build hash")
 	return tab
